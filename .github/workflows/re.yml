@@ -1,0 +1,82 @@
+name: Build and Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          APP_NAME="${{ github.event.repository.name }}"
+          VERSION="${{ github.ref_name }}"
+          BASE_LDFLAGS="-s -w -X main.Version=$VERSION"
+          
+          mkdir -p dist
+
+          if [ "${{ matrix.goos }}" == "windows" ]; then
+            # 1. 构建普通控制台版本 (CLI)
+            go build -ldflags="$BASE_LDFLAGS" -o "dist/${APP_NAME}-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.exe" .
+            
+            # 2. 构建隐藏控制台版本 (GUI)
+            go build -ldflags="$BASE_LDFLAGS -H windowsgui" -o "dist/${APP_NAME}-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}-gui.exe" .
+          else
+            # Linux 版本
+            go build -ldflags="$BASE_LDFLAGS" -o "dist/${APP_NAME}-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}" .
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
